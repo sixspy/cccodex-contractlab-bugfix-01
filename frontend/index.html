@@ -52,9 +52,11 @@ createApp({
     const token=ref(localStorage.getItem('contractlab_token')||'');
     const user=ref(localStorage.getItem('contractlab_user')||'');
     const username=ref('admin'), password=ref('123456'), err=ref(''), tab=ref(0), actionErr=ref('');
-    const contracts=ref([]), batches=ref([]), buffers=ref([]), recon=ref({});
+    const contracts=ref([]), batches=ref([]), buffers=ref([]), recon=ref({}), shadow=ref({items:[]});
+    const policy=ref({}), review=ref({});
     const form=ref({subject:'订单入站', payload_fields:'order_id,amount'});
-    const nav=['契约版本','入站校验','双写缓冲','契约对账'];
+    const shadowForm=ref({subject:'订单入站', payload_fields:'order_id,amount,currency,channel'});
+    const nav=['契约版本','入站校验','双写缓冲','契约对账','影子试跑'];
     function auth(){return {Authorization:'Bearer '+token.value,'Content-Type':'application/json'};}
     async function login(){
       err.value='';
@@ -81,6 +83,12 @@ createApp({
       buffers.value=Array.isArray(u.items)?u.items:[];
       const q=await loadJson('/api/reconcile'); if(q===null) return;
       recon.value=q&&typeof q==='object'?q:{};
+      const s=await loadJson('/api/shadow/queue'); if(s===null) return;
+      shadow.value=s&&Array.isArray(s.items)?s:{items:[]};
+      const po=await loadJson('/api/policy'); if(po===null) return;
+      policy.value=po&&typeof po==='object'?po:{};
+      const rv=await loadJson('/api/review'); if(rv===null) return;
+      review.value=rv&&typeof rv==='object'?rv:{};
     }
     async function validate(){
       actionErr.value='';
@@ -88,8 +96,14 @@ createApp({
       const j=await r.json(); actionErr.value=r.ok?('校验结果：'+j.result+(j.missing?('；缺 '+j.missing.join(',')):'')):(j.detail||'失败');
       await refresh();
     }
+    async function shadowRun(){
+      actionErr.value='';
+      const r=await fetch('/api/shadow/refresh',{method:'POST',headers:auth(),body:JSON.stringify(shadowForm.value)});
+      const j=await r.json(); actionErr.value=r.ok?('影子试跑：'+j.result+(j.missing?('；缺 '+j.missing.join(',')):'')):(j.detail||'失败');
+      await refresh();
+    }
     onMounted(()=>{if(token.value)refresh();});
-    return {token,user,username,password,err,tab,nav,contracts,batches,buffers,recon,form,actionErr,login,logout,validate};
+    return {token,user,username,password,err,tab,nav,contracts,batches,buffers,recon,shadow,policy,review,form,shadowForm,actionErr,login,logout,validate,shadowRun};
   },
   template:`
   <div v-if="!token" class="login">
@@ -140,6 +154,37 @@ createApp({
     <div class="card" v-show="tab===3">
       <h2>契约对账摘要</h2>
       <p>入站 {{recon.ingress_total}} · 通过 {{recon.passed}} · 缓冲 {{recon.buffered}} · 拒收 {{recon.rejected}} · 缓冲行 {{recon.buffer_rows}} · 对齐 {{recon.aligned}}</p>
+      <p class="meta">口径：仅正式轨道现场重算，影子批次不计入；算账争用 {{recon.contention}} 次。</p>
+    </div>
+    <div class="pair" v-show="tab===3">
+      <div class="card">
+        <h2>策略附调页</h2>
+        <p class="meta">正式批次 {{policy.official_total}} · 正式契约 {{policy.official_contracts}}</p>
+      </div>
+      <div class="card">
+        <h2>复核卡片</h2>
+        <p class="meta">正式批次 {{review.official_total}} · 通过 {{review.passed}} · 拒收 {{review.rejected}}</p>
+      </div>
+    </div>
+    <div class="pair" v-show="tab===4">
+      <div class="card">
+        <h2>影子试跑</h2>
+        <p class="meta">影子批次只进影子表，正式对账永不读取。</p>
+        <label>主题</label><input v-model="shadowForm.subject"/>
+        <label>载荷字段</label><input v-model="shadowForm.payload_fields"/>
+        <button class="primary" @click="shadowRun">按影子契约试跑</button>
+        <div class="err">{{actionErr}}</div>
+      </div>
+      <div class="card">
+        <h2>影子队列</h2>
+        <p class="meta">共 {{shadow.shadow_total||0}} · 通过 {{shadow.shadow_passed||0}} · 拒收 {{shadow.shadow_rejected||0}}</p>
+        <table><thead><tr><th>批次</th><th>结果</th><th>版本</th></tr></thead>
+        <tbody><tr v-for="b in (shadow.items||[]).slice(0,8)" :key="b.id">
+          <td>#{{b.id}} {{b.subject}}</td>
+          <td><span class="stamp" :class="{bad:b.result!=='通过'}">{{b.result}}</span></td>
+          <td>{{b.contract_version}}</td>
+        </tr></tbody></table>
+      </div>
     </div>
   </div>`
 }).mount('#app');
